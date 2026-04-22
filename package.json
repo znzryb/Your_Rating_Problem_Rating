@@ -1,0 +1,17 @@
+{
+  "name": "your-rating-problem-rating",
+  "version": "0.1.0",
+  "description": "Codeforces userscript: Carrot-style rating delta prediction + reverse-Elo problem rating for untagged problems.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0",
+    "vite-plugin-monkey": "^4.0.0"
+  }
+}
