@@ -1,49 +1,33 @@
-// Thin wrapper around GM_getValue/GM_setValue with TTL. Falls back to localStorage when the
-// userscript grants aren't available (e.g. during vite dev against a plain HTTP page).
-
-declare const GM_getValue: <T>(key: string, def: T) => T;
-declare const GM_setValue: (key: string, value: unknown) => void;
-declare const GM_deleteValue: (key: string) => void;
+// Thin TTL cache on top of localStorage. Content scripts share localStorage with the host page,
+// which is fine for our case — the keys are namespaced under `yrpr:` and the data isn't
+// sensitive (problem ratings + handle ratings, all derived from public CF API data).
 
 interface Envelope<T> {
   v: T;
   exp: number; // epoch ms
 }
 
-const hasGM = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
-
-function readRaw(key: string): string | null {
-  if (hasGM) return GM_getValue<string | null>(key, null);
-  return localStorage.getItem(key);
-}
-
-function writeRaw(key: string, val: string): void {
-  if (hasGM) GM_setValue(key, val);
-  else localStorage.setItem(key, val);
-}
-
-function deleteRaw(key: string): void {
-  if (hasGM) GM_deleteValue(key);
-  else localStorage.removeItem(key);
-}
-
 export function cacheGet<T>(key: string): T | null {
-  const raw = readRaw(key);
+  const raw = localStorage.getItem(key);
   if (!raw) return null;
   try {
     const env = JSON.parse(raw) as Envelope<T>;
     if (Date.now() > env.exp) {
-      deleteRaw(key);
+      localStorage.removeItem(key);
       return null;
     }
     return env.v;
   } catch {
-    deleteRaw(key);
+    localStorage.removeItem(key);
     return null;
   }
 }
 
 export function cacheSet<T>(key: string, value: T, ttlMs: number): void {
   const env: Envelope<T> = { v: value, exp: Date.now() + ttlMs };
-  writeRaw(key, JSON.stringify(env));
+  try {
+    localStorage.setItem(key, JSON.stringify(env));
+  } catch {
+    // Quota exceeded — silently drop. Cache miss next time is harmless.
+  }
 }

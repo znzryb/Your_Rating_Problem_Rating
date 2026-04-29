@@ -64,3 +64,19 @@ export interface CfRatingChange {
   oldRating: number;
   newRating: number;
 }
+
+export interface CfSubmission {
+  id: number;
+  contestId: number;
+  creationTimeSeconds: number;
+  relativeTimeSeconds: number;
+  problem: CfProblem;
+  author: CfParty;
+  programmingLanguage: string;
+  verdict?: string;
+  testset?: string;
+  passedTestCount?: number;
+  timeConsumedMillis?: number;
+  memoryConsumedBytes?: number;
+  points?: number;
+}

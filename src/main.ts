@@ -1,4 +1,3 @@
-import { bootstrapStandingsPanel } from './ui/standingsPanel';
 import { bootstrapProblemBadge } from './ui/problemBadge';
 
 console.log(
@@ -9,18 +8,12 @@ console.log(
 function route(): void {
   const path = location.pathname;
 
-  if (/\/contest\/\d+\/standings/.test(path)) {
-    void bootstrapStandingsPanel();
-    return;
-  }
-
   if (
     /\/contest\/\d+\/problem\/[A-Za-z]/.test(path) ||
     /\/problemset\/problem\/\d+\/[A-Za-z]/.test(path) ||
     /^\/contest\/\d+\/?$/.test(path)
   ) {
     void bootstrapProblemBadge();
-    return;
   }
 }
 
