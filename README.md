@@ -29,7 +29,13 @@
 
 1. 到 [Releases](https://github.com/znzryb/Your_Rating_Problem_Rating/releases) 下载最新的 `your-rating-problem-rating-vX.Y.Z.zip` 并解压；
 2. Chrome 打开 `chrome://extensions`，右上角打开**开发者模式**，点**加载已解压的扩展程序**，选解压出来的目录；
-3. 打开任意 CF 比赛题目页等 ~10 秒，徽章就会刷出来。
+3. 打开任意 CF 比赛题目页，先看到一个虚线占位徽章 `≈…`，等大约 10 秒：
+
+![加载中状态](docs/badge-pending.png)
+
+4. 数据拉完后徽章会替换成带颜色的 `≈XXXX`：
+
+![加载完成](docs/badge-loaded.png)
 
 ### 自己编译
 
@@ -81,7 +87,13 @@ Useful for problems that **don't have an official rating yet** — finished-but-
 
 1. Grab the latest `your-rating-problem-rating-vX.Y.Z.zip` from [Releases](https://github.com/znzryb/Your_Rating_Problem_Rating/releases) and unzip it.
 2. Open `chrome://extensions`, toggle **Developer mode** on, click **Load unpacked**, and pick the unzipped folder.
-3. Open any CF contest problem page; the badges show up after ~10 seconds.
+3. Open any CF contest problem page. You'll first see a dashed `≈…` placeholder badge — give it ~10 seconds:
+
+![pending state](docs/badge-pending.png)
+
+4. Once the data is fetched, the placeholder is replaced with the colored `≈XXXX` badge:
+
+![loaded state](docs/badge-loaded.png)
 
 ### Build from source
 
