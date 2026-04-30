@@ -37,6 +37,10 @@
 
 ![加载完成](docs/badge-loaded.png)
 
+5. 同样也在比赛题目列表页 `/contest/<id>` 上工作，整场比赛所有题目的推断 rating 一次性出齐：
+
+![整场比赛](docs/badge-contest-list.png)
+
 ### 自己编译
 
 ```bash
@@ -94,6 +98,10 @@ Useful for problems that **don't have an official rating yet** — finished-but-
 4. Once the data is fetched, the placeholder is replaced with the colored `≈XXXX` badge:
 
 ![loaded state](docs/badge-loaded.png)
+
+5. The contest list page `/contest/<id>` works too — every problem in the round gets its inferred rating in one shot:
+
+![full contest](docs/badge-contest-list.png)
 
 ### Build from source
 
