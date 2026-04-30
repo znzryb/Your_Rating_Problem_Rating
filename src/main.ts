@@ -9,9 +9,9 @@ function route(): void {
   const path = location.pathname;
 
   if (
-    /\/contest\/\d+\/problem\/[A-Za-z]/.test(path) ||
+    /\/(?:contest|gym)\/\d+\/problem\/[A-Za-z]/.test(path) ||
     /\/problemset\/problem\/\d+\/[A-Za-z]/.test(path) ||
-    /^\/contest\/\d+\/?$/.test(path)
+    /^\/(?:contest|gym)\/\d+\/?$/.test(path)
   ) {
     void bootstrapProblemBadge();
   }

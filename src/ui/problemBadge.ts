@@ -23,55 +23,86 @@ interface ContestInferenceResult {
 
 const inflightByContest = new Map<number, Promise<ContestInferenceResult>>();
 
-interface DerivedStandings {
-  problems: string[];
-  /** handle (lowercase) → set of problem indexes solved during the contest */
-  solvedByHandle: Map<string, Set<string>>;
+interface Contestant {
+  /** Lowercased handles of every member of this party (1 for solo, 2-3 for ICPC teams). */
+  handles: string[];
+  /** Problem indexes this contestant got an AC on during the contest window. */
+  solved: Set<string>;
 }
 
-function isOfficialContestSubmission(sub: CfSubmission, durationSeconds: number): boolean {
+interface DerivedStandings {
+  problems: string[];
+  /** stable team-id (sorted-handles join) → contestant. Solo contestants land here too. */
+  contestants: Map<string, Contestant>;
+}
+
+function isOfficialContestSubmission(
+  sub: CfSubmission,
+  durationSeconds: number,
+  gym: boolean,
+): boolean {
   const a = sub.author;
   if (!a) return false;
-  if (a.participantType !== 'CONTESTANT') return false;
   if (a.ghost) return false;
-  // Single-contestant rows only — skip teams (CF has both team contests and individual rounds).
-  if (!a.members || a.members.length !== 1) return false;
+  // Both solo and team submissions count — for ICPC gym contests every row is a 3-member
+  // team, and we still want to treat each team as one contestant for the Elo fit.
+  if (!a.members || a.members.length === 0) return false;
   const rel = sub.relativeTimeSeconds;
   if (!Number.isFinite(rel)) return false;
-  return rel >= 0 && rel <= durationSeconds;
+  if (rel < 0 || rel > durationSeconds) return false;
+
+  if (gym) {
+    // Gym: real timed attempts only — CONTESTANT (live registered), VIRTUAL (vp), and
+    // OUT_OF_COMPETITION (live but unrated, common for ICPC team gyms). PRACTICE is
+    // excluded: post-contest with editorials/solutions floating around, very noisy.
+    return (
+      a.participantType === 'CONTESTANT' ||
+      a.participantType === 'VIRTUAL' ||
+      a.participantType === 'OUT_OF_COMPETITION'
+    );
+  }
+  // Regular rounds: live CONTESTANT only, that's where the signal is cleanest.
+  return a.participantType === 'CONTESTANT';
+}
+
+function partyId(sub: CfSubmission): string {
+  return sub.author.members.map((m) => m.handle.toLowerCase()).sort().join('|');
 }
 
 function deriveStandingsFromSubmissions(
   submissions: CfSubmission[],
   contest: CfContest,
+  gym: boolean,
 ): DerivedStandings {
-  const problemSet = new Set<string>();
-  const solvedByHandle = new Map<string, Set<string>>();
+  // Diagnostic: dump the participantType breakdown so it's obvious from the console why
+  // the filter let through (or rejected) what it did.
+  const typeCounts = new Map<string, number>();
   for (const sub of submissions) {
-    if (!isOfficialContestSubmission(sub, contest.durationSeconds)) continue;
+    const t = sub.author?.participantType ?? 'NONE';
+    typeCounts.set(t, (typeCounts.get(t) ?? 0) + 1);
+  }
+  console.log('[YRPR] participantType breakdown:', Object.fromEntries(typeCounts));
+
+  const problemSet = new Set<string>();
+  const contestants = new Map<string, Contestant>();
+  for (const sub of submissions) {
+    if (!isOfficialContestSubmission(sub, contest.durationSeconds, gym)) continue;
     const idx = sub.problem?.index;
     if (!idx) continue;
     problemSet.add(idx);
-    if (sub.verdict !== 'OK') continue;
-    const handle = sub.author.members[0].handle.toLowerCase();
-    let solved = solvedByHandle.get(handle);
-    if (!solved) {
-      solved = new Set<string>();
-      solvedByHandle.set(handle, solved);
+    const id = partyId(sub);
+    let row = contestants.get(id);
+    if (!row) {
+      row = {
+        handles: sub.author.members.map((m) => m.handle.toLowerCase()),
+        solved: new Set<string>(),
+      };
+      contestants.set(id, row);
     }
-    solved.add(idx);
-  }
-  // Also walk submissions once more to make sure every party that *attempted* (even if no AC)
-  // is registered as a contestant — they count as a non-solver, which is signal for the Elo fit.
-  for (const sub of submissions) {
-    if (!isOfficialContestSubmission(sub, contest.durationSeconds)) continue;
-    const handle = sub.author.members[0].handle.toLowerCase();
-    if (!solvedByHandle.has(handle)) {
-      solvedByHandle.set(handle, new Set<string>());
-    }
+    if (sub.verdict === 'OK') row.solved.add(idx);
   }
   const problems = Array.from(problemSet).sort();
-  return { problems, solvedByHandle };
+  return { problems, contestants };
 }
 
 async function computeForContest(contestId: number, gym: boolean): Promise<ContestInferenceResult> {
@@ -95,25 +126,41 @@ async function computeForContest(contestId: number, gym: boolean): Promise<Conte
     });
     console.log(`[YRPR] total submissions fetched: ${submissions.length} in ${Math.round(performance.now() - t0)}ms`);
 
-    const { problems, solvedByHandle } = deriveStandingsFromSubmissions(submissions, contest);
-    console.log(`[YRPR] derived: ${problems.length} problems, ${solvedByHandle.size} unique contestants`);
-    if (solvedByHandle.size === 0) return { entries: new Map(), totalRated: 0 };
+    const { problems, contestants } = deriveStandingsFromSubmissions(submissions, contest, gym);
+    console.log(`[YRPR] derived: ${problems.length} problems, ${contestants.size} unique contestants`);
+    if (contestants.size === 0) return { entries: new Map(), totalRated: 0 };
 
-    const handles = Array.from(solvedByHandle.keys());
+    // Collect every individual handle across all parties (solo + team members).
+    const allHandles = new Set<string>();
+    for (const row of contestants.values()) for (const h of row.handles) allHandles.add(h);
+    const handles = Array.from(allHandles);
     const tRatings = performance.now();
     const infos = await getUserInfos(handles);
     const ratingByHandle = new Map<string, number>();
     for (const u of infos as CfUserInfo[]) ratingByHandle.set(u.handle.toLowerCase(), u.rating ?? 0);
     console.log(`[YRPR] user.info for ${handles.length} handles in ${Math.round(performance.now() - tRatings)}ms`);
 
+    // Effective rating per contestant = max over its members. For ICPC teams this treats
+    // the team as if its strongest member played alone — a coarse but well-defined proxy
+    // when CF doesn't expose a team rating.
+    const effectiveRating = new Map<string, number>();
+    for (const [id, row] of contestants) {
+      let best = 0;
+      for (const h of row.handles) {
+        const r = ratingByHandle.get(h) ?? 0;
+        if (r > best) best = r;
+      }
+      effectiveRating.set(id, best);
+    }
+
     const entries = new Map<string, InferredEntry>();
     let totalRated = 0;
     for (const idx of problems) {
       const samples: SolveSample[] = [];
-      for (const [handle, solvedSet] of solvedByHandle.entries()) {
-        const rating = ratingByHandle.get(handle) ?? 0;
+      for (const [id, row] of contestants) {
+        const rating = effectiveRating.get(id) ?? 0;
         if (rating <= 0) continue;
-        samples.push({ rating, solved: solvedSet.has(idx) });
+        samples.push({ rating, solved: row.solved.has(idx) });
       }
       if (idx === problems[0]) totalRated = samples.length;
       const inferred = inferProblemRating(samples);
@@ -181,28 +228,55 @@ function setTitleBadge(state: BadgeState): void {
   header.appendChild(makeBadge(state));
 }
 
-function renderBadgeInContestList(entries: Map<string, InferredEntry>): void {
+function makeContestListBadge(state: BadgeState): HTMLSpanElement {
+  const badge = document.createElement('span');
+  badge.className = 'yrpr-badge';
+  const baseStyle = ['margin-left:8px', 'font-weight:700', 'font-size:0.9em'];
+  if (state.kind === 'pending') {
+    badge.textContent = '≈…';
+    badge.title = 'YRPR computing inferred problem rating from CF submissions…';
+    badge.style.cssText = [...baseStyle, 'color:#888'].join(';');
+    return badge;
+  }
+  if (state.kind === 'unknown') {
+    badge.textContent = '≈?';
+    badge.title = 'YRPR: not enough signal in submissions (everyone or nobody solved it, or too few rated contestants).';
+    badge.style.cssText = [...baseStyle, 'color:#888'].join(';');
+    return badge;
+  }
+  if (state.kind === 'error') {
+    badge.textContent = '≈!';
+    badge.title = `YRPR error: ${state.message}\n\nOpen DevTools console and look for [YRPR] for details.`;
+    badge.style.cssText = [...baseStyle, 'color:#cc0000', 'cursor:help'].join(';');
+    return badge;
+  }
+  badge.textContent = `≈${state.entry.rating}`;
+  badge.title = `YRPR inferred rating (Carrot-style reverse Elo over ${state.entry.raters} rated contestants).`;
+  badge.style.cssText = [...baseStyle, `color:${ratingColor(state.entry.rating)}`].join(';');
+  return badge;
+}
+
+function setRowBadge(anchor: HTMLElement, state: BadgeState): void {
+  const existing = anchor.querySelector('.yrpr-badge');
+  if (existing) existing.remove();
+  anchor.appendChild(makeContestListBadge(state));
+}
+
+/**
+ * Snapshot the contest-list table once, before any DOM mutation, so we can keep mapping
+ * row → problem index even after we've appended badges that change `textContent`.
+ */
+function snapshotContestListRows(): Map<string, HTMLAnchorElement> {
+  const map = new Map<string, HTMLAnchorElement>();
   const rows = document.querySelectorAll<HTMLTableRowElement>('table.problems tr');
   for (const tr of Array.from(rows)) {
-    const first = tr.querySelector<HTMLElement>('td.id a');
+    const first = tr.querySelector<HTMLAnchorElement>('td.id a');
     if (!first) continue;
     const idx = first.textContent?.trim();
     if (!idx) continue;
-    const entry = entries.get(idx);
-    if (!entry) continue;
-    if (tr.querySelector('.yrpr-badge')) continue;
-    const badge = document.createElement('span');
-    badge.className = 'yrpr-badge';
-    badge.textContent = `≈${entry.rating}`;
-    badge.title = `YRPR inferred rating (Carrot-style reverse Elo over ${entry.raters} rated contestants).`;
-    badge.style.cssText = [
-      'margin-left:8px',
-      `color:${ratingColor(entry.rating)}`,
-      'font-weight:700',
-      'font-size:0.9em',
-    ].join(';');
-    first.appendChild(badge);
+    map.set(idx, first);
   }
+  return map;
 }
 
 export async function bootstrapProblemBadge(): Promise<void> {
@@ -232,10 +306,25 @@ export async function bootstrapProblemBadge(): Promise<void> {
 
   const problemsTable = await waitFor('table.problems');
   if (!problemsTable) return;
+
+  // Snapshot the row → letter mapping BEFORE we mutate, then drop a gray ≈… placeholder
+  // on every row so the user gets immediate feedback that the inference has started.
+  const rowMap = snapshotContestListRows();
+  for (const anchor of rowMap.values()) {
+    setRowBadge(anchor, { kind: 'pending' });
+  }
+
   try {
     const { entries } = await computeForContest(contestId, gym);
-    if (entries.size > 0) renderBadgeInContestList(entries);
+    for (const [idx, anchor] of rowMap) {
+      const entry = entries.get(idx);
+      setRowBadge(anchor, entry ? { kind: 'rating', entry } : { kind: 'unknown' });
+    }
   } catch (err) {
     console.error('[YRPR] problem badge (contest list) failed:', err);
+    const message = err instanceof Error ? err.message : String(err);
+    for (const anchor of rowMap.values()) {
+      setRowBadge(anchor, { kind: 'error', message });
+    }
   }
 }

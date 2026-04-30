@@ -14,11 +14,15 @@
 
 适合**还没有官方 rating** 的题目：刚结束 / 还没更新的轮次、Gym、合并 Div 的部分题目。
 
+**Gym 团队赛同样支持**——每队按 `max(队员 rating)` 折算成一个样本进 Elo 拟合：
+
+![Gym 团队赛](docs/badge-gym.png)
+
 ### 工作原理
 
 1. 拉这场比赛的全部 `contest.status` 提交（公开匿名 API）；
-2. 过滤出比赛窗口内、单人、非 ghost 的 `CONTESTANT` 提交，重建 (handle → 解出的题目集合)；
-3. 批量 `user.info` 查每个 handle 的赛前 rating；
+2. 过滤出比赛窗口内、非 ghost 的有效提交。常规 round 只收 `CONTESTANT`；Gym 同时收 `CONTESTANT` / `VIRTUAL`（vp） / `OUT_OF_COMPETITION`，挡掉噪音大的 `PRACTICE`。然后按队伍重建 (队伍 → 解出的题目集合)；
+3. 批量 `user.info` 查每位队员的赛前 rating，每队取最高分作为该样本的 effective rating；
 4. 对每道题二分 `R_X`，使
    $$\sum_i \frac{1}{1 + 10^{(R_X - R_i)/400}} \approx \text{该题解出人数}$$
    也就是 Carrot 用的那套反向 Elo 拟合。
@@ -52,9 +56,10 @@ npm run build
 
 ### 已知限制
 
-- 只用单人参赛者样本拟合，团队赛、virtual、out-of-competition、ghost 都跳过；
+- 团队赛按"队员里最高 rating"折算样本——这是 CF 不暴露团队 rating 时的近似，跟实际"队伍水平"会差一点；
 - 没有赛前 rating 的全新账号会被排除在样本外；
 - 反向 Elo 只是一阶近似，不考虑首杀时间和 wrong-attempt，跟 CF 官方 setter 给的 rating 会有出入，结果当**估算**看；
+- Gym `PRACTICE` 提交不计入（题解公开后的练习样本噪音太大），所以纯 PRACTICE 的 gym 可能算不出 rating；
 - 大场（>1 万人）首跑要 10–30s 拉提交，结果会缓存 24 小时；
 - CF API 偶发返回 5xx / 429 会自动指数退避重试；某批 `user.info` 因为有被删除的 handle 整批 400 时，那批样本会被跳过，剩余样本照常拟合。
 
@@ -76,11 +81,15 @@ A Chrome MV3 extension that adds a `≈XXXX` inferred-rating badge next to each 
 
 Useful for problems that **don't have an official rating yet** — finished-but-not-yet-updated rounds, Gym contests, some merged-Div rounds.
 
+**Gym team contests are supported too** — each team is collapsed to a single Elo sample with rating = `max(member ratings)`:
+
+![Gym team contest](docs/badge-gym.png)
+
 ### How it works
 
 1. Fetch all submissions for the contest via `contest.status` (anonymous public API).
-2. Filter to single-member, non-ghost `CONTESTANT` rows submitted within the contest window; rebuild `(handle → set of solved problems)`.
-3. Batch `user.info` to look up each handle's pre-contest rating.
+2. Filter to in-window non-ghost rows. Regular rounds: `CONTESTANT` only. Gym: `CONTESTANT` / `VIRTUAL` (vp) / `OUT_OF_COMPETITION`, with `PRACTICE` excluded (post-editorial noise). Then rebuild `(party → set of solved problems)`, keyed by sorted member-handles so a 3-member team is one row.
+3. Batch `user.info` to look up each member's pre-contest rating; for team rows, the team's effective rating is `max` over its members.
 4. For each problem, binary-search `R_X` such that
    $$\sum_i \frac{1}{1 + 10^{(R_X - R_i)/400}} \approx \text{number of solvers},$$
    the same reverse-Elo fit Carrot uses.
@@ -114,9 +123,10 @@ Output lands in `dist/` (and is also rsynced to `~/chrome-extensions/your-rating
 
 ### Known limits
 
-- Only single-contestant samples feed the fit; team rounds, virtual, out-of-competition, and ghost rows are skipped.
+- Team contests use `max(member ratings)` per team as the Elo sample — a coarse proxy when CF doesn't expose team ratings.
 - Brand-new accounts with no pre-contest rating are excluded.
 - Reverse-Elo is a first-order approximation — it ignores time-to-solve and wrong-attempt patterns that CF's internal setter accounts for. Treat the badge as "ballpark", not "official".
+- Gym `PRACTICE` submissions are excluded (post-editorial noise), so a pure-practice Gym contest may not have enough signal to fit.
 - Large rounds (>10k participants) need 10–30s the first time to pull submissions; results are cached for 24 hours.
 - Transient CF API errors (5xx / 429) are retried with exponential backoff; if one `user.info` batch 400s because of a deleted handle, that batch is skipped and the remaining samples still produce a result.
 
