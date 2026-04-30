@@ -1,65 +1,114 @@
 # Your Rating · Problem Rating
 
-Codeforces userscript that does two things:
+> Codeforces 题目「推断 rating」徽章 Chrome 扩展。在题目页和比赛题目列表页直接显示 Carrot 风格的反向 Elo 推断难度，只调用 CF 公开 API，本地计算，不依赖第三方服务。
 
-1. **Your Rating** — Carrot-style Δrating prediction. On any `/contest/{id}/standings*` page,
-   a "Refresh Predictions" button adds a `Δ` column showing each rated contestant's predicted
-   rating delta, using Mike Mirzayanov's published Elo formula with CF's two post-hoc
-   corrections. Works both during the round (in-progress snapshot) and for finished but
-   not-yet-rated rounds (Final-phase snapshot).
-2. **Problem Rating** — Reverse-Elo inference for problems that don't yet have an official
-   difficulty rating (fresh rounds pre-update, Gym rounds, some merged Div. rounds). On
-   a problem page or contest overview, a colored `≈NNNN` badge appears next to the title.
+---
 
-Nothing is sent anywhere except Codeforces' own public API. Predictions are computed locally.
+## 中文说明
 
-## Install
+### 这是什么
 
-1. Install Tampermonkey (or Violentmonkey).
-2. `pnpm install && pnpm build`
-3. Drag `dist/your-rating-problem-rating.user.js` into the extension, or point it at a
-   local file / hosted URL.
+打开 CF 比赛题目列表页（`/contest/<id>`）或单题页（`/contest/<id>/problem/X`），每道题旁边会多出一个 `≈XXXX` 徽章，颜色跟 CF 段位色一致：
 
-Dev:
+![徽章效果](docs/badge-demo.png)
+
+适合**还没有官方 rating** 的题目：刚结束 / 还没更新的轮次、Gym、合并 Div 的部分题目。
+
+### 工作原理
+
+1. 拉这场比赛的全部 `contest.status` 提交（公开匿名 API）；
+2. 过滤出比赛窗口内、单人、非 ghost 的 `CONTESTANT` 提交，重建 (handle → 解出的题目集合)；
+3. 批量 `user.info` 查每个 handle 的赛前 rating；
+4. 对每道题二分 `R_X`，使
+   $$\sum_i \frac{1}{1 + 10^{(R_X - R_i)/400}} \approx \text{该题解出人数}$$
+   也就是 Carrot 用的那套反向 Elo 拟合。
+
+### 安装（开发者模式加载）
+
+![安装步骤](docs/install-steps.png)
+
+1. 到 [Releases](https://github.com/znzryb/Your_Rating_Problem_Rating/releases) 下载最新的 `your-rating-problem-rating-vX.Y.Z.zip` 并解压；
+2. Chrome 打开 `chrome://extensions`，右上角打开**开发者模式**，点**加载已解压的扩展程序**，选解压出来的目录；
+3. 打开任意 CF 比赛题目页等 ~10 秒，徽章就会刷出来。
+
+### 自己编译
+
 ```bash
-pnpm dev
+npm install
+npm run build
 ```
-vite-plugin-monkey will print a `.user.js` URL — install that and it hot-reloads.
 
-## How it works
+构建产物落在 `dist/`（同时会 rsync 到 `~/chrome-extensions/your-rating-problem-rating/`，那是作者本机的开发目录，不影响你直接拿 `dist/` 装）。
 
-### Rating delta (`src/predictor/elo.ts`)
-For each rated contestant `i`:
-- `P(a beats b) = 1 / (1 + 10^((R_b − R_a) / 400))`
-- `seed_i = 1 + Σ_{j≠i} P(j beats i)` — expected rank from pre-contest ratings alone.
-- `midRank_i = sqrt(seed_i · actualRank_i)`
-- Binary-search `R'` s.t. `seed(R') = midRank_i`.
-- `rawDelta_i = (R' − R_i) / 2`
+### 已知限制
 
-Then two CF corrections (`src/predictor/corrections.ts`):
-- shift everyone so the total Δ is ≈ 0 (rating-sum conservation);
-- shift everyone so the top `4·sqrt(n)` by rating sum to 0 (no top-end inflation).
+- 只用单人参赛者样本拟合，团队赛、virtual、out-of-competition、ghost 都跳过；
+- 没有赛前 rating 的全新账号会被排除在样本外；
+- 反向 Elo 只是一阶近似，不考虑首杀时间和 wrong-attempt，跟 CF 官方 setter 给的 rating 会有出入，结果当**估算**看；
+- 大场（>1 万人）首跑要 10–30s 拉提交，结果会缓存 24 小时；
+- CF API 偶发返回 5xx / 429 会自动指数退避重试；某批 `user.info` 因为有被删除的 handle 整批 400 时，那批样本会被跳过，剩余样本照常拟合。
 
-Matches CF production to within ±1 on finished rounds.
+### 不做的事
 
-### Problem rating (`src/problem-rating/reverseElo.ts`)
-Given rated contestants' ratings and who solved problem X, binary-search a problem rating
-`R_X` such that
-`Σ_i 1 / (1 + 10^((R_X − R_i) / 400)) ≈ (# who solved X)`.
-Rounded to the nearest 100 and clamped to `[800, 3500]`. Only shown when no official
-rating exists.
+- **不**做 rating delta / Δ 预测——[Carrot](https://github.com/meooow25/carrot) 已经做得很好，不重复造轮子；
+- **不**调用 `clist.by` 或任何第三方服务——只走 codeforces.com 公开 API；
+- **不**碰登录态、不读 cookie、不发任何请求到 codeforces 之外。
 
-## Caveats
+---
 
-- Only rated single-contestant `CONTESTANT` rows go into the pool; team/virtual/out-of-comp
-  rows are skipped.
-- Brand-new accounts (no pre-contest rating) are filtered out.
-- Reverse-Elo is a first-order approximation — it ignores time-to-solve and re-submission
-  patterns that CF's internal setter uses. Treat the badge as "ballpark" not "official".
-- Refresh is manual. CF's public API is rate-limited to one call every two seconds; clicking
-  the button repeatedly during systests is fine, but don't hammer.
+## English
 
-## Formula references
+### What it is
 
-- https://codeforces.com/blog/entry/20762 — Mike Mirzayanov's Elo post
-- Carrot (`meooow25/carrot`) `predict.js` — CF-matching reference implementation of the two corrections
+A Chrome MV3 extension that adds a `≈XXXX` inferred-rating badge next to each problem on a Codeforces contest's problem list page (`/contest/<id>`) and on individual problem pages. Color follows CF rank colors:
+
+![badge demo](docs/badge-demo.png)
+
+Useful for problems that **don't have an official rating yet** — finished-but-not-yet-updated rounds, Gym contests, some merged-Div rounds.
+
+### How it works
+
+1. Fetch all submissions for the contest via `contest.status` (anonymous public API).
+2. Filter to single-member, non-ghost `CONTESTANT` rows submitted within the contest window; rebuild `(handle → set of solved problems)`.
+3. Batch `user.info` to look up each handle's pre-contest rating.
+4. For each problem, binary-search `R_X` such that
+   $$\sum_i \frac{1}{1 + 10^{(R_X - R_i)/400}} \approx \text{number of solvers},$$
+   the same reverse-Elo fit Carrot uses.
+
+### Install (unpacked from release)
+
+![install steps](docs/install-steps.png)
+
+1. Grab the latest `your-rating-problem-rating-vX.Y.Z.zip` from [Releases](https://github.com/znzryb/Your_Rating_Problem_Rating/releases) and unzip it.
+2. Open `chrome://extensions`, toggle **Developer mode** on, click **Load unpacked**, and pick the unzipped folder.
+3. Open any CF contest problem page; the badges show up after ~10 seconds.
+
+### Build from source
+
+```bash
+npm install
+npm run build
+```
+
+Output lands in `dist/` (and is also rsynced to `~/chrome-extensions/your-rating-problem-rating/` — that's the author's local dev sink, you can ignore it and load `dist/` directly).
+
+### Known limits
+
+- Only single-contestant samples feed the fit; team rounds, virtual, out-of-competition, and ghost rows are skipped.
+- Brand-new accounts with no pre-contest rating are excluded.
+- Reverse-Elo is a first-order approximation — it ignores time-to-solve and wrong-attempt patterns that CF's internal setter accounts for. Treat the badge as "ballpark", not "official".
+- Large rounds (>10k participants) need 10–30s the first time to pull submissions; results are cached for 24 hours.
+- Transient CF API errors (5xx / 429) are retried with exponential backoff; if one `user.info` batch 400s because of a deleted handle, that batch is skipped and the remaining samples still produce a result.
+
+### Non-goals
+
+- **No** rating-delta / Δ predictions — [Carrot](https://github.com/meooow25/carrot) already does this well; no point duplicating.
+- **No** third-party services like `clist.by` — only codeforces.com public API.
+- **No** auth, cookies, or off-CF network calls.
+
+---
+
+## References
+
+- [Mike Mirzayanov — Codeforces Rating System](https://codeforces.com/blog/entry/20762)
+- [meooow25/carrot](https://github.com/meooow25/carrot) — reference implementation of CF rating prediction; this project's `contest.status` rebuild path mirrors Carrot's `rebuildStandingsFromStatus`.
