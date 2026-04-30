@@ -172,12 +172,18 @@ export function getRatingChanges(contestId: number): Promise<CfRatingChange[]> {
 }
 
 /**
- * Look up a single contest's metadata. Calls `contest.list?gym=false` first; if not found,
- * falls back to `contest.list?gym=true`.
+ * Look up a single contest's metadata. If the caller already knows whether this is a Gym
+ * round (e.g. derived from a `/gym/<id>` URL), pass `gym` explicitly to skip the other
+ * list — `contest.list?gym=true` is hundreds of KB on its own. Otherwise we try
+ * `gym=false` then fall back to `gym=true`.
  */
-export async function findContest(contestId: number): Promise<CfContest | null> {
-  for (const gym of [false, true]) {
-    const list = await call<CfContest[]>('contest.list', { gym });
+export async function findContest(
+  contestId: number,
+  gym?: boolean,
+): Promise<CfContest | null> {
+  const order = gym === undefined ? [false, true] : [gym];
+  for (const g of order) {
+    const list = await call<CfContest[]>('contest.list', { gym: g });
     const c = list.find((x) => x.id === contestId);
     if (c) return c;
   }

@@ -74,7 +74,7 @@ function deriveStandingsFromSubmissions(
   return { problems, solvedByHandle };
 }
 
-async function computeForContest(contestId: number): Promise<ContestInferenceResult> {
+async function computeForContest(contestId: number, gym: boolean): Promise<ContestInferenceResult> {
   const cached = inflightByContest.get(contestId);
   if (cached) return cached;
   const promise = (async (): Promise<ContestInferenceResult> => {
@@ -86,7 +86,7 @@ async function computeForContest(contestId: number): Promise<ContestInferenceRes
     }
 
     const t0 = performance.now();
-    const contest = await findContest(contestId);
+    const contest = await findContest(contestId, gym);
     if (!contest) throw new Error(`contest ${contestId} not found in contest.list`);
     console.log(`[YRPR] contest ${contestId}: "${contest.name}", duration=${contest.durationSeconds}s`);
 
@@ -206,8 +206,9 @@ function renderBadgeInContestList(entries: Map<string, InferredEntry>): void {
 }
 
 export async function bootstrapProblemBadge(): Promise<void> {
-  const contestId = contestIdFromPath();
-  if (!contestId) return;
+  const ctx = contestIdFromPath();
+  if (!ctx) return;
+  const { contestId, gym } = ctx;
 
   const onSingleProblem = /\/problem\/[A-Za-z]/.test(location.pathname);
 
@@ -218,7 +219,7 @@ export async function bootstrapProblemBadge(): Promise<void> {
     if (!idx) return;
     setTitleBadge({ kind: 'pending' });
     try {
-      const { entries } = await computeForContest(contestId);
+      const { entries } = await computeForContest(contestId, gym);
       const entry = entries.get(idx);
       setTitleBadge(entry ? { kind: 'rating', entry } : { kind: 'unknown' });
     } catch (err) {
@@ -232,7 +233,7 @@ export async function bootstrapProblemBadge(): Promise<void> {
   const problemsTable = await waitFor('table.problems');
   if (!problemsTable) return;
   try {
-    const { entries } = await computeForContest(contestId);
+    const { entries } = await computeForContest(contestId, gym);
     if (entries.size > 0) renderBadgeInContestList(entries);
   } catch (err) {
     console.error('[YRPR] problem badge (contest list) failed:', err);
