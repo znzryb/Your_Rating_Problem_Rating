@@ -45,6 +45,20 @@
 
 ![整场比赛](docs/badge-contest-list.png)
 
+### 防剧透模式
+
+为了不在你打开题目时直接剧透难度，rating 加载完后**默认**会被遮起来——badge 占位还在，**鼠标悬停才显示** `≈XXXX` 和段位色。pending（`≈…`）和异常状态（`≈?` / `≈!`）不会被遮，确保你能看到扩展的工作进度。
+
+想关掉这个行为，在 CF 任意页面打开 DevTools Console（`F12`），执行：
+
+```js
+localStorage.setItem('yrpr:spoiler-mode', 'false')
+```
+
+然后刷新即可。想再开回来：`localStorage.removeItem('yrpr:spoiler-mode')` 或 `localStorage.setItem('yrpr:spoiler-mode', 'true')`。
+
+> **关于 Competitive Companion**：badge 的可视内容渲染在 Shadow DOM 里，所以 CC 点小绿点抓题时拿到的题目名是干净的 `D. Palindromex`，不会被污染成 `D. Palindromex ≈1100`。
+
 ### 自己编译
 
 ```bash

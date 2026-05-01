@@ -7,6 +7,7 @@ import { cacheGet, cacheSet } from '../storage/cache';
 import { inferProblemRating, type SolveSample } from '../problem-rating/reverseElo';
 import type { CfContest, CfSubmission, CfUserInfo } from '../cf/types';
 import { ratingColor } from './colors';
+import { isSpoilerEnabled, spoilerCss, SPOILER_HINT } from './spoiler';
 import { contestIdFromPath, problemIndexFromPath, waitFor } from '../utils/dom';
 
 const PROBLEM_TTL = 24 * 60 * 60 * 1000;
@@ -183,41 +184,93 @@ type BadgeState =
   | { kind: 'error'; message: string }
   | { kind: 'rating'; entry: InferredEntry };
 
+interface BadgeStyleSpec {
+  marginLeft: string;
+  innerStyle: string[];
+  text: string;
+  title: string;
+  isRating: boolean;
+}
+
+/**
+ * Build a badge whose visible text lives inside an open shadow tree.
+ *
+ * The host span sits where the old badge sat (e.g. as a child of `.title` on
+ * single-problem pages), but `Element.outerHTML` does not serialize shadow
+ * roots and `Node.textContent` does not walk into them, so Competitive
+ * Companion's `.problem-statement > .header > .title` parser sees a clean
+ * problem name without our `≈XXXX` tail.
+ */
+function buildShadowBadge(spec: BadgeStyleSpec): HTMLSpanElement {
+  const host = document.createElement('span');
+  host.className = 'yrpr-badge';
+  host.style.cssText = `display:inline-block;vertical-align:middle;margin-left:${spec.marginLeft}`;
+
+  const wantSpoiler = spec.isRating && isSpoilerEnabled();
+  host.title = wantSpoiler ? spec.title + SPOILER_HINT : spec.title;
+
+  const shadow = host.attachShadow({ mode: 'open' });
+
+  const style = document.createElement('style');
+  style.textContent = `
+    .inner { font: inherit; }
+    ${spoilerCss()}
+  `;
+  shadow.appendChild(style);
+
+  const inner = document.createElement('span');
+  inner.className = wantSpoiler ? 'inner spoiler' : 'inner';
+  inner.style.cssText = spec.innerStyle.join(';');
+  inner.textContent = spec.text;
+  shadow.appendChild(inner);
+
+  return host;
+}
+
 function makeBadge(state: BadgeState): HTMLSpanElement {
-  const badge = document.createElement('span');
-  badge.className = 'yrpr-badge';
-  const baseStyle = [
-    'display:inline-block', 'margin-left:10px',
+  const innerBase = [
+    'display:inline-block',
     'font-weight:700', 'font-size:0.85em',
     'padding:1px 6px', 'border-radius:4px',
-    'vertical-align:middle',
   ];
   if (state.kind === 'pending') {
-    badge.textContent = '≈…';
-    badge.title = 'YRPR computing inferred problem rating from CF submissions…';
-    badge.style.cssText = [...baseStyle, 'color:#aa8a20', 'border:1px dashed #d4b54f'].join(';');
-    return badge;
+    return buildShadowBadge({
+      marginLeft: '10px',
+      innerStyle: [...innerBase, 'color:#aa8a20', 'border:1px dashed #d4b54f'],
+      text: '≈…',
+      title: 'YRPR computing inferred problem rating from CF submissions…',
+      isRating: false,
+    });
   }
   if (state.kind === 'unknown') {
-    badge.textContent = '≈?';
-    badge.title = 'YRPR: not enough signal in submissions (everyone or nobody solved it, or too few rated contestants).';
-    badge.style.cssText = [...baseStyle, 'color:#888', 'border:1px solid #bbb'].join(';');
-    return badge;
+    return buildShadowBadge({
+      marginLeft: '10px',
+      innerStyle: [...innerBase, 'color:#888', 'border:1px solid #bbb'],
+      text: '≈?',
+      title: 'YRPR: not enough signal in submissions (everyone or nobody solved it, or too few rated contestants).',
+      isRating: false,
+    });
   }
   if (state.kind === 'error') {
-    badge.textContent = '≈!';
-    badge.title = `YRPR error: ${state.message}\n\nOpen the DevTools console and look for [YRPR] for details.`;
-    badge.style.cssText = [...baseStyle, 'color:#cc0000', 'border:1px solid #cc0000', 'cursor:help'].join(';');
-    return badge;
+    return buildShadowBadge({
+      marginLeft: '10px',
+      innerStyle: [...innerBase, 'color:#cc0000', 'border:1px solid #cc0000', 'cursor:help'],
+      text: '≈!',
+      title: `YRPR error: ${state.message}\n\nOpen the DevTools console and look for [YRPR] for details.`,
+      isRating: false,
+    });
   }
-  badge.textContent = `≈${state.entry.rating}`;
-  badge.title = `YRPR inferred rating (Carrot-style reverse Elo over ${state.entry.raters} rated contestants).`;
-  badge.style.cssText = [
-    ...baseStyle,
-    `color:${ratingColor(state.entry.rating)}`,
-    `border:1px solid ${ratingColor(state.entry.rating)}`,
-  ].join(';');
-  return badge;
+  return buildShadowBadge({
+    marginLeft: '10px',
+    innerStyle: [
+      ...innerBase,
+      `color:${ratingColor(state.entry.rating)}`,
+      `border:1px solid ${ratingColor(state.entry.rating)}`,
+    ],
+    text: `≈${state.entry.rating}`,
+    title: `YRPR inferred rating (Carrot-style reverse Elo over ${state.entry.raters} rated contestants).`,
+    isRating: true,
+  });
 }
 
 function setTitleBadge(state: BadgeState): void {
@@ -229,31 +282,41 @@ function setTitleBadge(state: BadgeState): void {
 }
 
 function makeContestListBadge(state: BadgeState): HTMLSpanElement {
-  const badge = document.createElement('span');
-  badge.className = 'yrpr-badge';
-  const baseStyle = ['margin-left:8px', 'font-weight:700', 'font-size:0.9em'];
+  const innerBase = ['font-weight:700', 'font-size:0.9em'];
   if (state.kind === 'pending') {
-    badge.textContent = '≈…';
-    badge.title = 'YRPR computing inferred problem rating from CF submissions…';
-    badge.style.cssText = [...baseStyle, 'color:#888'].join(';');
-    return badge;
+    return buildShadowBadge({
+      marginLeft: '8px',
+      innerStyle: [...innerBase, 'color:#888'],
+      text: '≈…',
+      title: 'YRPR computing inferred problem rating from CF submissions…',
+      isRating: false,
+    });
   }
   if (state.kind === 'unknown') {
-    badge.textContent = '≈?';
-    badge.title = 'YRPR: not enough signal in submissions (everyone or nobody solved it, or too few rated contestants).';
-    badge.style.cssText = [...baseStyle, 'color:#888'].join(';');
-    return badge;
+    return buildShadowBadge({
+      marginLeft: '8px',
+      innerStyle: [...innerBase, 'color:#888'],
+      text: '≈?',
+      title: 'YRPR: not enough signal in submissions (everyone or nobody solved it, or too few rated contestants).',
+      isRating: false,
+    });
   }
   if (state.kind === 'error') {
-    badge.textContent = '≈!';
-    badge.title = `YRPR error: ${state.message}\n\nOpen DevTools console and look for [YRPR] for details.`;
-    badge.style.cssText = [...baseStyle, 'color:#cc0000', 'cursor:help'].join(';');
-    return badge;
+    return buildShadowBadge({
+      marginLeft: '8px',
+      innerStyle: [...innerBase, 'color:#cc0000', 'cursor:help'],
+      text: '≈!',
+      title: `YRPR error: ${state.message}\n\nOpen DevTools console and look for [YRPR] for details.`,
+      isRating: false,
+    });
   }
-  badge.textContent = `≈${state.entry.rating}`;
-  badge.title = `YRPR inferred rating (Carrot-style reverse Elo over ${state.entry.raters} rated contestants).`;
-  badge.style.cssText = [...baseStyle, `color:${ratingColor(state.entry.rating)}`].join(';');
-  return badge;
+  return buildShadowBadge({
+    marginLeft: '8px',
+    innerStyle: [...innerBase, `color:${ratingColor(state.entry.rating)}`],
+    text: `≈${state.entry.rating}`,
+    title: `YRPR inferred rating (Carrot-style reverse Elo over ${state.entry.raters} rated contestants).`,
+    isRating: true,
+  });
 }
 
 function setRowBadge(anchor: HTMLElement, state: BadgeState): void {
